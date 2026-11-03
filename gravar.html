@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gravar áudio</title>
+<script src="https://res.cdn.office.net/teams-js/2.34.0/js/MicrosoftTeams.min.js"></script>
+<style>
+  :root { --bg:#ffffff; --fg:#242424; --muted:#616161; --accent:#5b5fc7; --rec:#c4314b; --ok:#13a10e; }
+  :root[data-theme="dark"], :root[data-theme="contrast"] { --bg:#1f1f1f; --fg:#ffffff; --muted:#adadad; --accent:#7f85f5; --rec:#e37d80; --ok:#54b054; }
+  * { box-sizing: border-box; }
+  body { margin:0; height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
+         gap:14px; background:var(--bg); color:var(--fg); font:15px "Segoe UI", system-ui, sans-serif; }
+  #btn { width:96px; height:96px; border-radius:50%; border:0; background:var(--accent); color:#fff;
+         font-size:38px; cursor:pointer; transition:transform .15s, background .2s; }
+  #btn:hover { transform:scale(1.05); }
+  #btn:disabled { opacity:.5; cursor:default; transform:none; }
+  #btn.gravando { background:var(--rec); animation:pulse 1.2s infinite; }
+  @keyframes pulse { 0%,100% { box-shadow:0 0 0 0 rgba(196,49,75,.5); } 50% { box-shadow:0 0 0 14px rgba(196,49,75,0); } }
+  #tempo { font-variant-numeric:tabular-nums; font-size:22px; font-weight:600; }
+  #status { color:var(--muted); text-align:center; padding:0 16px; min-height:1.4em; }
+  #status.ok { color:var(--ok); } #status.erro { color:var(--rec); }
+</style>
+</head>
+<body>
+  <button id="btn" title="Gravar">🎙️</button>
+  <div id="tempo">00:00</div>
+  <div id="status">Toque para começar a gravar</div>
+
+<script>
+// ⚙️ CONFIG: URL de PRODUÇÃO do webhook "Gravador (áudio)" do n8n
+const N8N_WEBHOOK = 'https://n8n2.fariasbrito.com.br/webhook/teams-audio';
+const LIMITE_SEGUNDOS = 300; // corta em 5 min (a API de transcrição aceita até 25 MB)
+
+const sessao = new URLSearchParams(location.search).get('s');
+const btn = document.getElementById('btn');
+const tempoEl = document.getElementById('tempo');
+const statusEl = document.getElementById('status');
+let recorder, chunks = [], inicio, timer, stream;
+
+const status = (txt, cls = '') => { statusEl.textContent = txt; statusEl.className = cls; };
+
+microsoftTeams.app.initialize().then(async () => {
+  const ctx = await microsoftTeams.app.getContext();
+  document.documentElement.dataset.theme = ctx.app?.theme || 'default';
+  microsoftTeams.app.registerOnThemeChangeHandler(t => document.documentElement.dataset.theme = t);
+}).catch(() => { /* aberto fora do Teams: funciona igual para testar */ });
+
+if (!sessao) { btn.disabled = true; status('Abra esta página pelo botão do bot no Teams.', 'erro'); }
+
+function formatoSuportado() {
+  const tipos = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
+  return tipos.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+}
+
+async function comecar() {
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    status('Não consegui acessar o microfone. Verifique a permissão do app no Teams.', 'erro');
+    return;
+  }
+  const mime = formatoSuportado();
+  recorder = new MediaRecorder(stream, mime ? { mimeType: mime } : undefined);
+  chunks = [];
+  recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+  recorder.onstop = enviar;
+  recorder.start();
+
+  inicio = Date.now();
+  timer = setInterval(() => {
+    const s = Math.floor((Date.now() - inicio) / 1000);
+    tempoEl.textContent = `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    if (s >= LIMITE_SEGUNDOS) parar();
+  }, 250);
+
+  btn.classList.add('gravando'); btn.textContent = '⏹'; btn.title = 'Parar';
+  status('Gravando… toque para parar e enviar');
+}
+
+function parar() {
+  clearInterval(timer);
+  if (recorder && recorder.state !== 'inactive') recorder.stop();
+  stream?.getTracks().forEach(t => t.stop());
+  btn.classList.remove('gravando'); btn.textContent = '⏳'; btn.disabled = true;
+}
+
+async function enviar() {
+  status('Enviando…');
+  const tipo = recorder.mimeType || 'audio/webm';
+  const ext = tipo.includes('mp4') ? 'm4a' : tipo.includes('ogg') ? 'ogg' : 'webm';
+  const fd = new FormData();
+  fd.append('audio', new Blob(chunks, { type: tipo }), `gravacao.${ext}`);
+  fd.append('s', sessao);
+
+  try {
+    const r = await fetch(N8N_WEBHOOK, { method: 'POST', body: fd });
+    if (!r.ok) throw new Error(r.status);
+    btn.textContent = '✅';
+    status('Enviado! A transcrição vai chegar no chat.', 'ok');
+    setTimeout(() => { try { microsoftTeams.dialog.url.submit(); } catch (e) {} }, 1200);
+  } catch (e) {
+    btn.textContent = '🎙️'; btn.disabled = false;
+    status('Falhou ao enviar. Tente de novo.', 'erro');
+  }
+}
+
+btn.onclick = () => (recorder && recorder.state === 'recording') ? parar() : comecar();
+</script>
+</body>
+</html>

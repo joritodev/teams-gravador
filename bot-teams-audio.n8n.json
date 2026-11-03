@@ -1,0 +1,477 @@
+{
+  "name": "Bot Teams - Áudio para transcrição",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Bot Teams → Áudio → Transcrição\n\n**1. Credenciais** (criar no n8n e selecionar nos nós):\n- **Teams Bot (OAuth2 API)** no nó *Enviar mensagem no Teams*:\n  - Grant Type: Client Credentials\n  - Access Token URL: `https://login.microsoftonline.com/SEU_TENANT_ID/oauth2/v2.0/token`\n  - Client ID / Secret: do Bot management\n  - Scope: `https://api.botframework.com/.default`\n  - Authentication: Send credentials in body\n- **OpenAI** no nó *Transcrever*\n\n**2. Config nos Code nodes:** `BOT_APP_ID` (Classificar) e `PAGINA_GRAVADOR` (Criar sessão).\n\n**3. Ative o workflow** e use as URLs de *produção*:\n- `/webhook/teams-bot` → Endpoint do bot no Developer Portal\n- `/webhook/teams-audio` → usada pelo gravar.html\n",
+        "height": 440,
+        "width": 460
+      },
+      "id": "e53b124d-2aa5-41dd-978e-38b293437584",
+      "name": "Leia-me",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -560,
+        -320
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "teams-bot",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "71259b9f-4d7b-4dfd-9701-17851eaab249",
+      "name": "Teams Bot (activities)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        200
+      ],
+      "webhookId": "2853603e-0b15-4453-9fa2-b6ba6d857024"
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ CONFIG: App ID do bot (Developer Portal → Bot management)\nconst BOT_APP_ID = 'COLE_AQUI_O_APP_ID_DO_BOT';\n\nconst a = $input.first().json.body || {};\nconst EXT_AUDIO = ['mp3','m4a','wav','webm','ogg','oga','mp4','mpeg','mpga','flac','aac','opus'];\n\nlet rota = 'outro';\n\n// Segurança mínima: a activity tem que ser para o seu bot e vir de um serviceUrl do Teams.\n// (O token do bot é enviado para o serviceUrl, então NUNCA aceite um serviceUrl qualquer.)\nconst paraMeuBot = (a.recipient?.id || '').endsWith(BOT_APP_ID);\nconst serviceUrlOk = /^https:\\/\\/smba\\.trafficmanager\\.net\\//i.test(a.serviceUrl || '');\n\nconst arquivo = (a.attachments || []).find(\n  x => x.contentType === 'application/vnd.microsoft.teams.file.download.info'\n);\nconst ehAudio = !!arquivo && EXT_AUDIO.includes((arquivo.content?.fileType || '').toLowerCase());\n\nif (paraMeuBot && serviceUrlOk) {\n  if (a.type === 'invoke' && a.name === 'task/fetch') rota = 'taskfetch';\n  else if (a.type === 'message' && ehAudio) rota = 'audio';\n  else if (a.type === 'message') rota = 'texto';\n}\n\nreturn [{ json: { rota, activity: a, arquivo: arquivo || null, arquivoNaoAudio: !!arquivo && !ehAudio } }];\n"
+      },
+      "id": "333d91cf-67ce-42f8-9cef-5adfdee9ca55",
+      "name": "Classificar activity",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 4,
+        "output": "={{ ({ taskfetch: 0, audio: 1, texto: 2 })[$json.rota] ?? 3 }}"
+      },
+      "id": "c6599b14-34aa-41d8-8f96-f2ab40dc4a19",
+      "name": "Rota",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        440,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// ⚙️ CONFIG: URL pública (HTTPS) onde você hospedou o gravar.html\nconst PAGINA_GRAVADOR = 'https://SEU-DOMINIO/gravar.html';\n\nconst a = $input.first().json.activity;\nconst store = $getWorkflowStaticData('global');\nstore.sessoes = store.sessoes || {};\n\n// limpa sessões vencidas\nconst agora = Date.now();\nfor (const [k, v] of Object.entries(store.sessoes)) if (v.expira < agora) delete store.sessoes[k];\n\n// token de uso único: a página manda ele de volta junto com o áudio\nlet token;\ntry { token = require('crypto').randomBytes(24).toString('hex'); }\ncatch (e) { token = Array.from({ length: 48 }, () => Math.floor(Math.random() * 16).toString(16)).join(''); }\n\nstore.sessoes[token] = {\n  conversationId: a.conversation.id,\n  serviceUrl: a.serviceUrl,\n  expira: agora + 10 * 60 * 1000, // 10 minutos\n};\n\nreturn [{ json: { resposta: { task: { type: 'continue', value: {\n  title: 'Gravar áudio',\n  url: `${PAGINA_GRAVADOR}?s=${token}`,\n  height: 320,\n  width: 420,\n} } } } }];\n"
+      },
+      "id": "b67114c4-2679-4041-aa51-50188ba43016",
+      "name": "Criar sessão de gravação",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.resposta }}",
+        "options": {}
+      },
+      "id": "2294c844-572c-4f90-873b-4d93e4f5cc4d",
+      "name": "Responder task/fetch",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        920,
+        -100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      },
+      "id": "c6eac445-047d-4790-a99f-74dcdce9fb57",
+      "name": "OK (áudio)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        700,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { activity: a, arquivo } = $input.first().json;\nreturn [{ json: {\n  serviceUrl: a.serviceUrl,\n  conversationId: a.conversation.id,\n  downloadUrl: arquivo.content.downloadUrl,\n  nome: arquivo.name,\n} }];\n"
+      },
+      "id": "21f09ffd-dcef-4023-808d-c11151a93b87",
+      "name": "Preparar download",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.downloadUrl }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "file",
+              "outputPropertyName": "audio"
+            }
+          }
+        }
+      },
+      "id": "6a75991d-0597-47d4-8c46-c96166f4c52c",
+      "name": "Baixar áudio do OneDrive",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1140,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      },
+      "id": "4effc69d-0f10-4e78-b713-b6c4733c8c71",
+      "name": "OK (texto)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        700,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const { activity: a, arquivoNaoAudio } = $input.first().json;\n\nconst card = {\n  type: 'AdaptiveCard',\n  $schema: 'http://adaptivecards.io/schemas/adaptive-card.json',\n  version: '1.4',\n  body: [\n    { type: 'TextBlock', weight: 'Bolder', size: 'Medium',\n      text: arquivoNaoAudio ? 'Esse arquivo não parece ser um áudio 🤔' : 'Oi! Me manda um áudio 🎙️' },\n    { type: 'TextBlock', wrap: true,\n      text: 'Você pode anexar um arquivo de áudio aqui no chat ou gravar agora pelo botão abaixo.' },\n  ],\n  actions: [\n    { type: 'Action.Submit', title: '🎙️ Gravar áudio', data: { msteams: { type: 'task/fetch' } } },\n  ],\n};\n\nreturn [{ json: {\n  serviceUrl: a.serviceUrl,\n  conversationId: a.conversation.id,\n  activity: { type: 'message', attachments: [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }] },\n} }];\n"
+      },
+      "id": "e539afd6-d956-4a29-9e3a-9de126368c09",
+      "name": "Montar card com botão",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "noData",
+        "options": {}
+      },
+      "id": "9d3b6d0e-8cc8-4d50-ade5-15e46b8cd10a",
+      "name": "OK (outros)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        700,
+        600
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "teams-audio",
+        "responseMode": "onReceived",
+        "options": {
+          "allowedOrigins": "*"
+        }
+      },
+      "id": "2c8b9c59-924d-4319-9201-9eb9086ee169",
+      "name": "Gravador (áudio)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        700,
+        800
+      ],
+      "webhookId": "22efc345-3d3a-4446-aa3b-f98aac98409e"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Confere o token de uso único criado no clique do botão\nconst item = $input.first();\nconst s = item.json.body?.s || item.json.query?.s;\nconst store = $getWorkflowStaticData('global');\nconst sessao = store.sessoes?.[s];\n\nif (!sessao || sessao.expira < Date.now()) throw new Error('Sessão inválida ou expirada');\ndelete store.sessoes[s]; // uso único\n\nreturn [{ json: { serviceUrl: sessao.serviceUrl, conversationId: sessao.conversationId }, binary: item.binary || {} }];\n"
+      },
+      "id": "8eb588e9-c92d-4f8b-b89b-ee578c2be587",
+      "name": "Validar sessão",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        920,
+        800
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Ponto de encontro dos dois caminhos (arquivo no chat e gravador).\n// Sai daqui sempre: json { serviceUrl, conversationId } + binary.audio\nconst item = $input.first();\nlet ctx = item.json;\nif (!ctx.serviceUrl) ctx = $('Preparar download').first().json;\n\nconst bin = item.binary || {};\nconst chave = Object.keys(bin)[0];\nif (!chave) throw new Error('Nenhum áudio recebido');\n\nconst audio = bin[chave];\nif (ctx.nome) audio.fileName = ctx.nome; // a OpenAI usa a extensão do nome para saber o formato\n\nreturn [{ json: { serviceUrl: ctx.serviceUrl, conversationId: ctx.conversationId }, binary: { audio } }];\n"
+      },
+      "id": "3cd0c653-cce1-49d6-a1df-2dcb6ba20430",
+      "name": "Contexto do áudio",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1360,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/audio/transcriptions",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "openAiApi",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "audio"
+            },
+            {
+              "name": "model",
+              "value": "whisper-1"
+            },
+            {
+              "name": "language",
+              "value": "pt"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "10bad5c4-6fe9-4352-b8a2-034f8008fed3",
+      "name": "Transcrever",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1580,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 👉 Aqui é onde você pluga o resto da sua automação (resumo, salvar no banco, etc.)\nconst ctx = $('Contexto do áudio').first().json;\nconst texto = ($input.first().json.text || '').trim() || '(não consegui entender o áudio)';\n\nreturn [{ json: {\n  serviceUrl: ctx.serviceUrl,\n  conversationId: ctx.conversationId,\n  activity: { type: 'message', text: `📝 **Transcrição:**\\n\\n${texto}` },\n} }];\n"
+      },
+      "id": "a80382bf-8a16-4b2c-ad64-a23e5a446472",
+      "name": "Montar resposta",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1800,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.serviceUrl.replace(/\\/$/, '') + '/v3/conversations/' + encodeURIComponent($json.conversationId) + '/activities' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.activity) }}",
+        "options": {}
+      },
+      "id": "5d946bd0-5cde-405b-9edd-b63cb1fbe894",
+      "name": "Enviar mensagem no Teams",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2040,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Teams Bot (activities)": {
+      "main": [
+        [
+          {
+            "node": "Classificar activity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classificar activity": {
+      "main": [
+        [
+          {
+            "node": "Rota",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rota": {
+      "main": [
+        [
+          {
+            "node": "Criar sessão de gravação",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OK (áudio)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OK (texto)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "OK (outros)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Criar sessão de gravação": {
+      "main": [
+        [
+          {
+            "node": "Responder task/fetch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OK (áudio)": {
+      "main": [
+        [
+          {
+            "node": "Preparar download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar download": {
+      "main": [
+        [
+          {
+            "node": "Baixar áudio do OneDrive",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Baixar áudio do OneDrive": {
+      "main": [
+        [
+          {
+            "node": "Contexto do áudio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OK (texto)": {
+      "main": [
+        [
+          {
+            "node": "Montar card com botão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar card com botão": {
+      "main": [
+        [
+          {
+            "node": "Enviar mensagem no Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gravador (áudio)": {
+      "main": [
+        [
+          {
+            "node": "Validar sessão",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar sessão": {
+      "main": [
+        [
+          {
+            "node": "Contexto do áudio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Contexto do áudio": {
+      "main": [
+        [
+          {
+            "node": "Transcrever",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Transcrever": {
+      "main": [
+        [
+          {
+            "node": "Montar resposta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar resposta": {
+      "main": [
+        [
+          {
+            "node": "Enviar mensagem no Teams",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
