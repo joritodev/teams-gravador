@@ -28,11 +28,13 @@
   <div id="status">Toque para começar a gravar</div>
 
 <script>
-// ⚙️ CONFIG: URL de PRODUÇÃO do webhook "Gravador (áudio)" do n8n
+// ⚙️ CONFIG: URL de PRODUÇÃO do webhook do "Hub de Áudio" no n8n
 const N8N_WEBHOOK = 'https://n8n2.fariasbrito.com.br/webhook/audio-hub';
 const LIMITE_SEGUNDOS = 300; // corta em 5 min (a API de transcrição aceita até 25 MB)
 
-const sessao = new URLSearchParams(location.search).get('s');
+const params = new URLSearchParams(location.search);
+const sessao = params.get('s');
+const bot = params.get('b'); // qual bot abriu o gravador
 const btn = document.getElementById('btn');
 const tempoEl = document.getElementById('tempo');
 const statusEl = document.getElementById('status');
@@ -46,7 +48,7 @@ microsoftTeams.app.initialize().then(async () => {
   microsoftTeams.app.registerOnThemeChangeHandler(t => document.documentElement.dataset.theme = t);
 }).catch(() => { /* aberto fora do Teams: funciona igual para testar */ });
 
-if (!sessao) { btn.disabled = true; status('Abra esta página pelo botão do bot no Teams.', 'erro'); }
+if (!sessao || !bot) { btn.disabled = true; status('Abra esta página pelo botão do bot no Teams.', 'erro'); }
 
 function formatoSuportado() {
   const tipos = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus'];
@@ -92,12 +94,13 @@ async function enviar() {
   const fd = new FormData();
   fd.append('audio', new Blob(chunks, { type: tipo }), `gravacao.${ext}`);
   fd.append('s', sessao);
+  fd.append('b', bot);
 
   try {
     const r = await fetch(N8N_WEBHOOK, { method: 'POST', body: fd });
     if (!r.ok) throw new Error(r.status);
     btn.textContent = '✅';
-    status('Enviado! A transcrição vai chegar no chat.', 'ok');
+    status('Enviado! A resposta vai chegar no chat.', 'ok');
     setTimeout(() => { try { microsoftTeams.dialog.url.submit(); } catch (e) {} }, 1200);
   } catch (e) {
     btn.textContent = '🎙️'; btn.disabled = false;
