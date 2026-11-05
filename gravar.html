@@ -43,6 +43,7 @@ let recorder, chunks = [], inicio, timer, stream;
 const status = (txt, cls = '') => { statusEl.textContent = txt; statusEl.className = cls; };
 
 microsoftTeams.app.initialize().then(async () => {
+  try { microsoftTeams.app.notifySuccess(); } catch (e) {}
   const ctx = await microsoftTeams.app.getContext();
   document.documentElement.dataset.theme = ctx.app?.theme || 'default';
   microsoftTeams.app.registerOnThemeChangeHandler(t => document.documentElement.dataset.theme = t);
