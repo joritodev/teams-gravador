@@ -4,7 +4,24 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gravar áudio</title>
-<script src="https://res.cdn.office.net/teams-js/2.34.0/js/MicrosoftTeams.min.js"></script>
+<script>
+// DIAGNÓSTICO: avisa o Hub a cada etapa do carregamento (aparece em Executions do Hub)
+const DIAG_URL = 'https://n8n2.fariasbrito.com.br/webhook/audio-hub';
+function diag(etapa, detalhe) {
+  try {
+    const fd = new FormData();
+    fd.append('diag', etapa);
+    fd.append('detalhe', String(detalhe ?? '').slice(0, 500));
+    fd.append('ua', navigator.userAgent);
+    fd.append('url', location.href);
+    navigator.sendBeacon(DIAG_URL, fd);
+  } catch (e) {}
+}
+diag('1-pagina-carregou');
+window.addEventListener('error', e => diag('erro-js', e.message + ' linha ' + e.lineno));
+window.addEventListener('unhandledrejection', e => diag('promise-rejeitada', e.reason && (e.reason.message || e.reason)));
+</script>
+<script src="https://res.cdn.office.net/teams-js/2.34.0/js/MicrosoftTeams.min.js" onload="diag('2-teamsjs-carregou')" onerror="diag('2-teamsjs-falhou')"></script>
 <style>
   :root { --bg:#ffffff; --fg:#242424; --muted:#616161; --accent:#5b5fc7; --rec:#c4314b; --ok:#13a10e; }
   :root[data-theme="dark"], :root[data-theme="contrast"] { --bg:#1f1f1f; --fg:#ffffff; --muted:#adadad; --accent:#7f85f5; --rec:#e37d80; --ok:#54b054; }
@@ -45,9 +62,10 @@ const status = (txt, cls = '') => { statusEl.textContent = txt; statusEl.classNa
 microsoftTeams.app.initialize().then(async () => {
   try { microsoftTeams.app.notifySuccess(); } catch (e) {}
   const ctx = await microsoftTeams.app.getContext();
+  diag('3-initialize-ok', (ctx.app?.host?.clientType || '?') + ' / ' + (ctx.app?.host?.name || '?'));
   document.documentElement.dataset.theme = ctx.app?.theme || 'default';
   microsoftTeams.app.registerOnThemeChangeHandler(t => document.documentElement.dataset.theme = t);
-}).catch(() => { /* aberto fora do Teams: funciona igual para testar */ });
+}).catch(e => diag('3-initialize-falhou', e && (e.message || e)));
 
 if (!sessao || !bot) { btn.disabled = true; status('Abra esta página pelo botão do bot no Teams.', 'erro'); }
 
